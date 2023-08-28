@@ -147,8 +147,8 @@ def _gaussian_angular_filter(
     # the angular wrap-around problem sine difference and cosine
     # difference values are first computed and then the atan2
     # function is used to determine angular distance.
-    d_sins = sin_thetas * cos_angle - cos_thetas * sin_angle  # Difference in sine.
-    d_coss = cos_thetas * cos_angle + sin_thetas * sin_angle  # Difference in cosine
+    d_sins = sin_thetas * cos_angle - cos_thetas * sin_angle  # Difference in sine: sin(theta - alpha)
+    d_coss = cos_thetas * cos_angle + sin_thetas * sin_angle  # Difference in cosine: cos(theta - alpha)
     d_thetas = np.arctan2(d_sins, d_coss)  # Angular distance.
     return np.exp(-d_thetas ** 2 / (2 * theta_sigma ** 2))
 
@@ -207,7 +207,6 @@ def ppdenoise(
              as per the original algorithm.
     """
 
-
     # Reference:
     # Peter Kovesi, "Phase Preserving Denoising of Images".
     # The Australian Pattern Recognition Society Conference: DICTA'99.
@@ -221,6 +220,138 @@ def ppdenoise(
     # Generate grid data for constructing filters in the frequency domain
     freq, fx, fy = _filter_grids(rows, cols)
     sintheta, costheta = _grid_angles(freq, fx, fy)
+    totalEnergy = np.zeros((rows, cols), np.cdouble)  # response at each orientation.
+    RayMean = 0.0
+    RayVar = 0.0
+    for o in range(1, norient + 1):  # For each orientation.
+        angle_rad = (o - 1) * pi / norient  # Calculate filter angle.
+        # Generate angular filter
+        angle_filter = _gaussian_angular_filter(angle_rad, thetaSigma, sintheta, costheta)
+
+        wavelength = minwavelength  # Initialize filter wavelength.
+
+        for s in range(1, nscale + 1):
+            # Construct the filter = logGabor filter * angular filter
+            fo = 1.0 / wavelength
+            scale_filter = _log_gabor(freq, fo, sigmaonf)
+            final_filter = scale_filter * angle_filter
+
+            # Convolve image with even an odd filters returning the result in EO
+            EO = ifft2(IMG * final_filter)
+            aEO = np.abs(EO)
+
+            if s == 1:
+                # Estimate the mean and variance in the amplitude
+                # response of the smallest scale filter pair at this
+                # orientation.  If the noise is Gaussian the amplitude
+                # response will have a Rayleigh distribution.  We
+                # calculate the median amplitude response as this is a
+                # robust statistic.  From this we estimate the mean
+                # and variance of the Rayleigh distribution
+                RayMean = np.median(aEO) * 0.5 * math.sqrt(-pi / math.log(0.5))
+                RayVar = (4 - pi) * (RayMean ** 2) / pi
+
+            # Compute soft threshold noting that the effect of noise
+            # is inversely proportional to the filter bandwidth/centre
+            # frequency. (If the noise has a uniform spectrum)
+            T = (RayMean + k * math.sqrt(RayVar)) / (mult ** (s - 1))
+
+            above_thresh = aEO > T  # aEO is less than T outside of this mask so makes no contribution to totalEnergy
+            # Complex noise vector to subtract = T * normalize(EO) times degree of 'softness'
+            V = softness * T * EO[above_thresh] / (aEO[above_thresh] + epsilon)
+            EO[above_thresh] -= V  # Subtract noise vector.
+            totalEnergy[above_thresh] += EO[above_thresh]
+
+            wavelength *= mult  # Wavelength of next filter
+    return np.real(totalEnergy)
+
+
+def _grid_angles_3d(freqs: np.ndarray, fx: np.ndarray, fy: np.ndarray, fz: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Generate arrays of filter grid angles.
+    Args:
+        freqs: As returned by _filter_grids.
+        fx: As returned by _filter_grids.
+        fy: As returned by _filter_grids.
+        fz: As returned by _filter_grids.
+
+    Returns:
+        sin_thetas: Array of the sines of the angles in the filtergrid.
+        cos_thetas: Array of the cosines of the angles in the filtergrid.
+
+    """
+    freqs[0, 0] = 1  # Avoid divide by 0
+    sintheta = fx / freqs  # sine and cosine of filter grid angles
+    costheta = fy / freqs
+    freqs[0, 0] = 0  # Restore 0 DC
+    return sintheta, costheta
+
+
+def _filter_grids_3d(plns: int, rows: int, cols: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Generate frequency-shifted grids for constructing frequency domain filters.
+    This differs slightly from Kovesi's implementation in Julia in that the extreme
+    frequencies for odd-length rows (or cols) are the +ve and -ve Nyquist frequencies of 0.5.
+
+    Args:
+        pln: Number of planes in the volume / 3D filter.
+        rows: Number of rows in the volume / 3D filter.
+        cols: Number of columns in the volume / 3D filter.
+        pages: Number of pages (depths) in the volume / 3D filter.
+
+    Returns:
+        f - Grid of size (rows, cols) containing frequency
+            values from 0 to 0.5, where f = sqrt(fx^2 + fy^2 + z^2).
+            The grid is quadrant shifted so that 0 frequency is at f[0,0].
+
+        fx, fy, fz - Grids containing normalised frequency values
+                     ranging from -0.5 to 0.5 in x, y, and z directions
+                     respectively. fx, fy, and fz are quadrant shifted.
+
+    """
+
+    # Set up X and Y spatial frequency matrices, fx and fy, with ranges
+    # normalised to +/- 0.5
+    fxrange = _spaced_frequencies(cols)
+    fyrange = _spaced_frequencies(rows)
+    fzrange = _spaced_frequencies(plns)
+
+    # Array structure maintains convention: shape is (plns, rows, cols)
+    fx = [[[c for c in fxrange] for _ in fyrange] for _ in fzrange]
+    fy = [[[r for _ in fxrange] for r in fyrange] for _ in fzrange]
+    fz = [[[p for _ in fxrange] for _ in fyrange] for p in fzrange]
+
+    # Quadrant shift so that filters are constructed with 0 frequency at
+    # the corners
+    fx = ifftshift(fx)
+    fy = ifftshift(fy)
+    fz = ifftshift(fz)
+
+    # Construct spatial frequency values in terms of normalised radius from
+    # centre.
+    f = np.sqrt(fx ** 2 + fy ** 2 + fz ** 2)
+    return f, fx, fy, fz
+
+
+def ppdenoise3d(
+        img: np.ndarray,
+        nscale: int = 5,
+        norient: int = 6,
+        mult: float = 2.5,
+        minwavelength: float = 2.0,
+        sigmaonf: float = 0.55,
+        dthetaonsigma: float = 1.0,
+        k: float = 3.0,
+        softness: float = 1.0,
+) -> np.ndarray:
+    epsilon = 1e-5  # Used to prevent division by zero.
+    # Calculate the standard deviation of the angular Gaussian function used to construct filters in the freq. plane.
+    thetaSigma = pi / norient / dthetaonsigma
+    plns, rows, cols = img.shape
+    IMG = fft2(img)
+    # Generate grid data for constructing filters in the frequency domain
+    freq, fx, fy, fz = _filter_grids_3d(plns, rows, cols)
+    sintheta, costheta = _grid_angles_3d(freq, fx, fy, fz)
     totalEnergy = np.zeros((rows, cols), np.cdouble)  # response at each orientation.
     RayMean = 0.0
     RayVar = 0.0
