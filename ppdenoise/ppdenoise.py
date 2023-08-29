@@ -336,7 +336,6 @@ def _filter_grids_3d(plns: int, rows: int, cols: int) -> tuple[np.ndarray, np.nd
 def ppdenoise3d(
         img: np.ndarray,
         nscale: int = 5,
-        norient: int = 6,
         mult: float = 2.5,
         minwavelength: float = 2.0,
         sigmaonf: float = 0.55,
@@ -344,6 +343,8 @@ def ppdenoise3d(
         k: float = 3.0,
         softness: float = 1.0,
 ) -> np.ndarray:
+    norient = 10  # face centres of top half of icosahedron
+
     epsilon = 1e-5  # Used to prevent division by zero.
     # Calculate the standard deviation of the angular Gaussian function used to construct filters in the freq. plane.
     thetaSigma = pi / norient / dthetaonsigma
