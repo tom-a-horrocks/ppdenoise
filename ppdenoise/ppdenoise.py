@@ -1,5 +1,6 @@
 import math
-from math import pi
+from collections import namedtuple
+from math import pi, atan, sqrt, acos
 
 import numpy as np
 from numpy.fft import fft2, ifftshift, ifft2
@@ -153,6 +154,53 @@ def _gaussian_angular_filter(
     return np.exp(-d_thetas ** 2 / (2 * theta_sigma ** 2))
 
 
+def _gaussian_angular_filter_3d(
+        polar: float,
+        azimuth: float,
+        theta_sigma: float,
+        sin_polars: np.ndarray,
+        cos_polars: np.ndarray,
+        sin_azimuths: np.ndarray,
+        cos_azimuths: np.ndarray
+) -> np.ndarray:
+    """
+    Orientation selective frequency domain filter with Gaussian windowing function.
+
+    Args:
+        polar: Polar orientation of the filter (radians)
+        azimuth: Azimuthal orientation of the filter (radians)
+        theta_sigma: Standard deviation of angular Gaussian window function.
+        sin_polars: As returned by _grid_angles
+        cos_polars: As returned by _grid_angles
+        sin_azimuths: As returned by _grid_angles
+        cos_azimuths: As returned by _grid_angles
+
+    Returns: Filter described above.
+
+    """
+    sin_polar_ori = math.sin(polar)
+    cos_polar_ori = math.cos(polar)
+    sin_azimuth_ori = math.sin(azimuth)
+    cos_azimuth_ori = math.cos(azimuth)
+
+    d_thetas = np.arccos(
+        sin_polar_ori * sin_polars * (cos_azimuth_ori * cos_azimuths + sin_azimuth_ori * sin_azimuths)
+        + cos_polar_ori * cos_polars
+    )  # TODO double-check polars and azis were calculated with unit vectors
+    return np.exp(-d_thetas ** 2 / (2 * theta_sigma ** 2))
+
+
+    # For each point in the filter matrix calculate the angular
+    # distance from the specified filter orientation.  To overcome
+    # the angular wrap-around problem sine difference and cosine
+    # difference values are first computed and then the atan2
+    # function is used to determine angular distance.
+    d_sins = sin_thetas * cos_angle - cos_thetas * sin_angle  # Difference in sine: sin(theta - alpha)
+    d_coss = cos_thetas * cos_angle + sin_thetas * sin_angle  # Difference in cosine: cos(theta - alpha)
+    d_thetas = np.arctan2(d_sins, d_coss)  # Angular distance.
+    return np.exp(-d_thetas ** 2 / (2 * theta_sigma ** 2))
+
+
 def ppdenoise(
         img: np.ndarray,
         nscale: int = 5,
@@ -266,7 +314,12 @@ def ppdenoise(
     return np.real(totalEnergy)
 
 
-def _grid_angles_3d(freqs: np.ndarray, fx: np.ndarray, fy: np.ndarray, fz: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def _grid_angles_3d(
+        freqs: np.ndarray,
+        fx: np.ndarray,
+        fy: np.ndarray,
+        fz: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Generate arrays of filter grid angles.
     Args:
@@ -276,15 +329,21 @@ def _grid_angles_3d(freqs: np.ndarray, fx: np.ndarray, fy: np.ndarray, fz: np.nd
         fz: As returned by _filter_grids.
 
     Returns:
-        sin_thetas: Array of the sines of the angles in the filtergrid.
-        cos_thetas: Array of the cosines of the angles in the filtergrid.
+        sin_polar: Array of the sines of the polar angles in the filtergrid.
+        cos_polar: Array of the cosines of the polar angles in the filtergrid.
+        sin_azimuth: Array of the sines of the azimuthal angles in the filtergrid.
+        cos_azimuth: Array of the cosines of the azimuthal angles in the filtergrid.
 
     """
-    freqs[0, 0] = 1  # Avoid divide by 0
-    sintheta = fx / freqs  # sine and cosine of filter grid angles
-    costheta = fy / freqs
-    freqs[0, 0] = 0  # Restore 0 DC
-    return sintheta, costheta
+    fxy = np.sqrt(fx ** 2 + fy ** 2)
+    freqs[0, 0, 0] = 1  # Avoid divide by 0
+    fxy[0, 0] = 1  # Avoid divide by 0
+    sin_polar = fy / fxy
+    cos_polar = fx / fxy
+    sin_azimuth = fxy / freqs
+    cos_azimuth = fz / freqs
+    freqs[0, 0, 0] = 0  # Restore 0 DC
+    return sin_polar, cos_polar, sin_azimuth, cos_azimuth
 
 
 def _filter_grids_3d(plns: int, rows: int, cols: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -343,23 +402,44 @@ def ppdenoise3d(
         k: float = 3.0,
         softness: float = 1.0,
 ) -> np.ndarray:
-    norient = 10  # face centres of top half of icosahedron
-
     epsilon = 1e-5  # Used to prevent division by zero.
     # Calculate the standard deviation of the angular Gaussian function used to construct filters in the freq. plane.
-    thetaSigma = pi / norient / dthetaonsigma
+    # Use the angle between face-centres of icosahedron (or vertices of dodecahedron)
+    theta_sigma = acos(sqrt(5) / 3)  # about 42 degrees
+
     plns, rows, cols = img.shape
     IMG = fft2(img)
     # Generate grid data for constructing filters in the frequency domain
     freq, fx, fy, fz = _filter_grids_3d(plns, rows, cols)
-    sintheta, costheta = _grid_angles_3d(freq, fx, fy, fz)
-    totalEnergy = np.zeros((rows, cols), np.cdouble)  # response at each orientation.
+    sin_polar, cos_polar, sin_azimuth, cos_azimuth = _grid_angles_3d(freq, fx, fy, fz)
+    totalEnergy = np.zeros((plns, rows, cols), np.cdouble)  # response at each orientation.
     RayMean = 0.0
     RayVar = 0.0
-    for o in range(1, norient + 1):  # For each orientation.
-        angle_rad = (o - 1) * pi / norient  # Calculate filter angle.
+
+    # Face normals of the top hemisphere of a (regular) icosahedron
+    Ori3D = namedtuple('Orientation', ['polar', 'azimuth'])
+    orientations = [Ori3D(polar=pi - atan(3 - sqrt(5)), azimuth=-(2 * pi) / 5),
+                    Ori3D(polar=pi - atan(3 - sqrt(5)), azimuth=0),
+                    Ori3D(polar=pi - atan(3 - sqrt(5)), azimuth=(2 * pi) / 5),
+                    Ori3D(polar=pi - atan(3 - sqrt(5)), azimuth=(4 * pi) / 5),
+                    Ori3D(polar=pi - atan(3 - sqrt(5)), azimuth=-(4 * pi) / 5),
+                    Ori3D(polar=pi - atan(3 + sqrt(5)), azimuth=-(2 * pi) / 5),
+                    Ori3D(polar=pi - atan(3 + sqrt(5)), azimuth=0),
+                    Ori3D(polar=pi - atan(3 + sqrt(5)), azimuth=(2 * pi) / 5),
+                    Ori3D(polar=pi - atan(3 + sqrt(5)), azimuth=(4 * pi) / 5),
+                    Ori3D(polar=pi - atan(3 + sqrt(5)), azimuth=-(4 * pi) / 5)]
+
+    for o in orientations:  # For each of ten orientations.
         # Generate angular filter
-        angle_filter = _gaussian_angular_filter(angle_rad, thetaSigma, sintheta, costheta)
+        angle_filter = _gaussian_angular_filter_3d(
+            polar=o.polar,
+            azimuth=o.azimuth,
+            theta_sigma=theta_sigma,
+            sin_polars=sin_polar,
+            cos_polars=cos_polar,
+            sin_azimuths=sin_azimuth,
+            cos_azimuths=cos_azimuth
+        )
 
         wavelength = minwavelength  # Initialize filter wavelength.
 
