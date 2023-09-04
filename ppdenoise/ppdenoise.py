@@ -1,6 +1,6 @@
 import math
 from collections import namedtuple
-from math import pi, atan, sqrt, acos
+from math import pi, atan, sqrt, acos, sin, cos
 
 import numpy as np
 from numpy.fft import fft2, ifftshift, ifft2
@@ -109,7 +109,7 @@ def _filter_grids(rows: int, cols: int) -> tuple[np.ndarray, np.ndarray, np.ndar
     fyrange = _spaced_frequencies(rows)
 
     fx = [[c for c in fxrange] for _ in fyrange]
-    fy = [[r for _ in fxrange] for r in fyrange]
+    fy = [[r for _ in fxrange] for r in fyrange]  # reversed so +ve y comes first (plotted at the top)
 
     # Quadrant shift so that filters are constructed with 0 frequency at
     # the corners
@@ -167,8 +167,8 @@ def _gaussian_angular_filter_3d(
     Orientation selective frequency domain filter with Gaussian windowing function.
 
     Args:
-        polar: Polar orientation of the filter (radians)
-        azimuth: Azimuthal orientation of the filter (radians)
+        polar: Polar orientation of the filter (radians) [theta]
+        azimuth: Azimuthal orientation of the filter (radians) [phi]
         theta_sigma: Standard deviation of angular Gaussian window function.
         sin_polars: As returned by _grid_angles
         cos_polars: As returned by _grid_angles
@@ -176,28 +176,25 @@ def _gaussian_angular_filter_3d(
         cos_azimuths: As returned by _grid_angles
 
     Returns: Filter described above.
-
     """
-    sin_polar_ori = math.sin(polar)
-    cos_polar_ori = math.cos(polar)
-    sin_azimuth_ori = math.sin(azimuth)
-    cos_azimuth_ori = math.cos(azimuth)
+    # For each point in the filter matrix calculate the angular distance from the
+    # specified filter orientation. The angle between the filter matrix element
+    # and the filter orientation is obtained via a dot product in spherical coordinates:
+    #
+    #   cos(d_theta) = filter_orientation . grid_orientation
+    #
+    #                  | fx |   | gx |        || | fx | ||   || | fx | ||
+    #                = | fy | . | gy |  where || | fy | || = || | fy | || = 1
+    #                  | fz |   | gz |        || | fz | ||   || | fz | ||
+    #
+    #                  | Sin(f_polar) Cos(f_azi)    |     | Sin(g_polar) Cos(g_azi)    |
+    #                = | Sin(f_polar) Sin(f_polar)) |  .  | Sin(g_polar) Sin(g_polar)) |
+    #                  | Cos(f_polar)               |     | Cos(g_polar)               |
 
     d_thetas = np.arccos(
-        sin_polar_ori * sin_polars * (cos_azimuth_ori * cos_azimuths + sin_azimuth_ori * sin_azimuths)
-        + cos_polar_ori * cos_polars
-    )  # TODO double-check polars and azis were calculated with unit vectors
-    return np.exp(-d_thetas ** 2 / (2 * theta_sigma ** 2))
-
-
-    # For each point in the filter matrix calculate the angular
-    # distance from the specified filter orientation.  To overcome
-    # the angular wrap-around problem sine difference and cosine
-    # difference values are first computed and then the atan2
-    # function is used to determine angular distance.
-    d_sins = sin_thetas * cos_angle - cos_thetas * sin_angle  # Difference in sine: sin(theta - alpha)
-    d_coss = cos_thetas * cos_angle + sin_thetas * sin_angle  # Difference in cosine: cos(theta - alpha)
-    d_thetas = np.arctan2(d_sins, d_coss)  # Angular distance.
+        sin(polar) * sin_polars * (cos(azimuth) * cos_azimuths + sin(azimuth) * sin_azimuths)
+        + cos(polar) * cos_polars
+    )
     return np.exp(-d_thetas ** 2 / (2 * theta_sigma ** 2))
 
 
@@ -336,8 +333,8 @@ def _grid_angles_3d(
 
     """
     fxy = np.sqrt(fx ** 2 + fy ** 2)
+    fxy[:, 0, 0] = 1  # Avoid divide by 0
     freqs[0, 0, 0] = 1  # Avoid divide by 0
-    fxy[0, 0] = 1  # Avoid divide by 0
     sin_polar = fy / fxy
     cos_polar = fx / fxy
     sin_azimuth = fxy / freqs
@@ -403,21 +400,22 @@ def ppdenoise3d(
         softness: float = 1.0,
 ) -> np.ndarray:
     epsilon = 1e-5  # Used to prevent division by zero.
+
     # Calculate the standard deviation of the angular Gaussian function used to construct filters in the freq. plane.
     # Use the angle between face-centres of icosahedron (or vertices of dodecahedron)
     theta_sigma = acos(sqrt(5) / 3)  # about 42 degrees
 
     plns, rows, cols = img.shape
-    IMG = fft2(img)
+    freq_img = fft2(img)
     # Generate grid data for constructing filters in the frequency domain
     freq, fx, fy, fz = _filter_grids_3d(plns, rows, cols)
     sin_polar, cos_polar, sin_azimuth, cos_azimuth = _grid_angles_3d(freq, fx, fy, fz)
-    totalEnergy = np.zeros((plns, rows, cols), np.cdouble)  # response at each orientation.
-    RayMean = 0.0
-    RayVar = 0.0
+    total_energy = np.zeros((plns, rows, cols), np.cdouble)  # response at each orientation.
+    ray_mean = 0.0
+    ray_var = 0.0
 
     # Face normals of the top hemisphere of a (regular) icosahedron
-    Ori3D = namedtuple('Orientation', ['polar', 'azimuth'])
+    Ori3D = namedtuple('Ori3D', ['polar', 'azimuth'])
     orientations = [Ori3D(polar=pi - atan(3 - sqrt(5)), azimuth=-(2 * pi) / 5),
                     Ori3D(polar=pi - atan(3 - sqrt(5)), azimuth=0),
                     Ori3D(polar=pi - atan(3 - sqrt(5)), azimuth=(2 * pi) / 5),
@@ -450,7 +448,7 @@ def ppdenoise3d(
             final_filter = scale_filter * angle_filter
 
             # Convolve image with even an odd filters returning the result in EO
-            EO = ifft2(IMG * final_filter)
+            EO = ifft2(freq_img * final_filter)
             aEO = np.abs(EO)
 
             if s == 1:
@@ -461,19 +459,19 @@ def ppdenoise3d(
                 # calculate the median amplitude response as this is a
                 # robust statistic.  From this we estimate the mean
                 # and variance of the Rayleigh distribution
-                RayMean = np.median(aEO) * 0.5 * math.sqrt(-pi / math.log(0.5))
-                RayVar = (4 - pi) * (RayMean ** 2) / pi
+                ray_mean = np.median(aEO) * 0.5 * math.sqrt(-pi / math.log(0.5))
+                ray_var = (4 - pi) * (ray_mean ** 2) / pi
 
             # Compute soft threshold noting that the effect of noise
             # is inversely proportional to the filter bandwidth/centre
             # frequency. (If the noise has a uniform spectrum)
-            T = (RayMean + k * math.sqrt(RayVar)) / (mult ** (s - 1))
+            T = (ray_mean + k * math.sqrt(ray_var)) / (mult ** (s - 1))
 
             above_thresh = aEO > T  # aEO is less than T outside of this mask so makes no contribution to totalEnergy
             # Complex noise vector to subtract = T * normalize(EO) times degree of 'softness'
             V = softness * T * EO[above_thresh] / (aEO[above_thresh] + epsilon)
             EO[above_thresh] -= V  # Subtract noise vector.
-            totalEnergy[above_thresh] += EO[above_thresh]
+            total_energy[above_thresh] += EO[above_thresh]
 
             wavelength *= mult  # Wavelength of next filter
-    return np.real(totalEnergy)
+    return np.real(total_energy)
