@@ -264,7 +264,7 @@ def ppdenoise(
     IMG = fft2(img)
     # Generate grid data for constructing filters in the frequency domain
     freq, fx, fy = _filter_grids(rows, cols)
-    sintheta, costheta = _grid_angles(freq, fx, fy)
+    sintheta, costheta = _grid_angles(freq, fx, -fy)  # Negative fy to give +ve anti-clockwise angles
     totalEnergy = np.zeros((rows, cols), np.cdouble)  # response at each orientation.
     RayMean = 0.0
     RayVar = 0.0
