@@ -333,32 +333,29 @@ def _grid_angles_3d(
 
     """
     fxy = np.sqrt(fx ** 2 + fy ** 2)
-    fxy[:, 0, 0] = 1  # Avoid divide by 0
+    fxy[0, 0, :] = 1  # Avoid divide by 0
     freqs[0, 0, 0] = 1  # Avoid divide by 0
-    sin_polar = fy / fxy
-    cos_polar = fx / fxy
-    sin_azimuth = fxy / freqs
-    cos_azimuth = fz / freqs
+    sin_polar = fxy / freqs
+    cos_polar = fz / freqs
+    sin_azimuth = fy / fxy
+    cos_azimuth = fx / fxy
     freqs[0, 0, 0] = 0  # Restore 0 DC
     return sin_polar, cos_polar, sin_azimuth, cos_azimuth
 
 
-def _filter_grids_3d(plns: int, rows: int, cols: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def _filter_grids_3d(nx: int, ny: int, nz: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Generate frequency-shifted grids for constructing frequency domain filters.
     This differs slightly from Kovesi's implementation in Julia in that the extreme
     frequencies for odd-length rows (or cols) are the +ve and -ve Nyquist frequencies of 0.5.
 
     Args:
-        pln: Number of planes in the volume / 3D filter.
-        rows: Number of rows in the volume / 3D filter.
-        cols: Number of columns in the volume / 3D filter.
-        pages: Number of pages (depths) in the volume / 3D filter.
+        nx, ny, nz: Resolution of filter in each dimension.
 
     Returns:
-        f - Grid of size (rows, cols) containing frequency
-            values from 0 to 0.5, where f = sqrt(fx^2 + fy^2 + z^2).
-            The grid is quadrant shifted so that 0 frequency is at f[0,0].
+        f - Grid of size (nx, ny, nz) containing frequency
+            values from 0 to 0.5, where f = sqrt(fx^2 + fy^2 + fz^2).
+            The grid is quadrant shifted so that 0 frequency is at f[0,0,0].
 
         fx, fy, fz - Grids containing normalised frequency values
                      ranging from -0.5 to 0.5 in x, y, and z directions
@@ -366,16 +363,13 @@ def _filter_grids_3d(plns: int, rows: int, cols: int) -> tuple[np.ndarray, np.nd
 
     """
 
-    # Set up X and Y spatial frequency matrices, fx and fy, with ranges
-    # normalised to +/- 0.5
-    fxrange = _spaced_frequencies(cols)
-    fyrange = _spaced_frequencies(rows)
-    fzrange = _spaced_frequencies(plns)
+    # Set up X, Y, and Z spatial frequency matrices with ranges normalised to +/- 0.5
+    fxrange = _spaced_frequencies(nx)
+    fyrange = _spaced_frequencies(ny)
+    fzrange = _spaced_frequencies(nz)
 
-    # Array structure maintains convention: shape is (plns, rows, cols)
-    fx = [[[c for c in fxrange] for _ in fyrange] for _ in fzrange]
-    fy = [[[r for _ in fxrange] for r in fyrange] for _ in fzrange]
-    fz = [[[p for _ in fxrange] for _ in fyrange] for p in fzrange]
+    # Grid structure is (nx, ny, nz)
+    fx, fy, fz = np.meshgrid(fxrange, fyrange, fzrange, indexing='ij')
 
     # Quadrant shift so that filters are constructed with 0 frequency at
     # the corners
@@ -395,7 +389,6 @@ def ppdenoise3d(
         mult: float = 2.5,
         minwavelength: float = 2.0,
         sigmaonf: float = 0.55,
-        dthetaonsigma: float = 1.0,
         k: float = 3.0,
         softness: float = 1.0,
 ) -> np.ndarray:
