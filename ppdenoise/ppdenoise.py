@@ -409,16 +409,16 @@ def ppdenoise3d(
 
     # Face normals of the top hemisphere of a (regular) icosahedron
     Ori3D = namedtuple('Ori3D', ['polar', 'azimuth'])
-    orientations = [Ori3D(polar=pi - atan(3 - sqrt(5)), azimuth=-(2 * pi) / 5),
-                    Ori3D(polar=pi - atan(3 - sqrt(5)), azimuth=0),
-                    Ori3D(polar=pi - atan(3 - sqrt(5)), azimuth=(2 * pi) / 5),
-                    Ori3D(polar=pi - atan(3 - sqrt(5)), azimuth=(4 * pi) / 5),
-                    Ori3D(polar=pi - atan(3 - sqrt(5)), azimuth=-(4 * pi) / 5),
-                    Ori3D(polar=pi - atan(3 + sqrt(5)), azimuth=-(2 * pi) / 5),
-                    Ori3D(polar=pi - atan(3 + sqrt(5)), azimuth=0),
-                    Ori3D(polar=pi - atan(3 + sqrt(5)), azimuth=(2 * pi) / 5),
-                    Ori3D(polar=pi - atan(3 + sqrt(5)), azimuth=(4 * pi) / 5),
-                    Ori3D(polar=pi - atan(3 + sqrt(5)), azimuth=-(4 * pi) / 5)]
+    orientations = [Ori3D(polar=atan(3 - sqrt(5)), azimuth=(3 * pi / 5)),
+                    Ori3D(polar=atan(3 - sqrt(5)), azimuth=pi),
+                    Ori3D(polar=atan(3 - sqrt(5)), azimuth=-(3 * pi / 5)),
+                    Ori3D(polar=atan(3 - sqrt(5)), azimuth=-(pi / 5)),
+                    Ori3D(polar=atan(3 - sqrt(5)), azimuth=(pi / 5)),
+                    Ori3D(polar=atan(3 + sqrt(5)), azimuth=(3 * pi / 5)),
+                    Ori3D(polar=atan(3 + sqrt(5)), azimuth=pi),
+                    Ori3D(polar=atan(3 + sqrt(5)), azimuth=-(3 * pi / 5)),
+                    Ori3D(polar=atan(3 + sqrt(5)), azimuth=-(pi / 5)),
+                    Ori3D(polar=atan(3 + sqrt(5)), azimuth=(pi / 5))]
 
     for o in orientations:  # For each of ten orientations.
         # Generate angular filter
