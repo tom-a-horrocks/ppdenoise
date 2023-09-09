@@ -1,9 +1,9 @@
 import math
 from collections import namedtuple
-from math import pi, atan, sqrt, acos, sin, cos
+from math import pi, atan, sqrt, acos, sin, cos, log
 
 import numpy as np
-from numpy.fft import fft2, ifftshift, ifft2
+from numpy.fft import fft2, ifftshift, ifft2, fftn, ifftn
 
 
 def _log_gabor(freqs: np.ndarray, fo: float, sigma_on_f: float) -> np.ndarray:
@@ -399,7 +399,7 @@ def ppdenoise3d(
     theta_sigma = acos(sqrt(5) / 3)  # about 42 degrees
 
     plns, rows, cols = img.shape
-    freq_img = fft2(img)
+    freq_img = fftn(img)
     # Generate grid data for constructing filters in the frequency domain
     freq, fx, fy, fz = _filter_grids_3d(plns, rows, cols)
     sin_polar, cos_polar, sin_azimuth, cos_azimuth = _grid_angles_3d(freq, fx, fy, fz)
@@ -441,7 +441,7 @@ def ppdenoise3d(
             final_filter = scale_filter * angle_filter
 
             # Convolve image with even an odd filters returning the result in EO
-            EO = ifft2(freq_img * final_filter)
+            EO = ifftn(freq_img * final_filter)
             aEO = np.abs(EO)
 
             if s == 1:
@@ -452,13 +452,13 @@ def ppdenoise3d(
                 # calculate the median amplitude response as this is a
                 # robust statistic.  From this we estimate the mean
                 # and variance of the Rayleigh distribution
-                ray_mean = np.median(aEO) * 0.5 * math.sqrt(-pi / math.log(0.5))
+                ray_mean = np.median(aEO) * 0.5 * sqrt(-pi / log(0.5))
                 ray_var = (4 - pi) * (ray_mean ** 2) / pi
 
             # Compute soft threshold noting that the effect of noise
             # is inversely proportional to the filter bandwidth/centre
             # frequency. (If the noise has a uniform spectrum)
-            T = (ray_mean + k * math.sqrt(ray_var)) / (mult ** (s - 1))
+            T = (ray_mean + k * sqrt(ray_var)) / (mult ** (s - 1))
 
             above_thresh = aEO > T  # aEO is less than T outside of this mask so makes no contribution to totalEnergy
             # Complex noise vector to subtract = T * normalize(EO) times degree of 'softness'
