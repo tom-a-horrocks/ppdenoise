@@ -458,7 +458,7 @@ def ppdenoise3d(
             # Compute soft threshold noting that the effect of noise
             # is inversely proportional to the filter bandwidth/centre
             # frequency. (If the noise has a uniform spectrum)
-            T = (ray_mean + k * sqrt(ray_var)) / (mult ** (s - 1))
+            T = (ray_mean + k * sqrt(ray_var)) / (mult ** (1.5 * (s - 1)))  # in 3D, proportional to 1 / fc^(3/2)
 
             above_thresh = aEO > T  # aEO is less than T outside of this mask so makes no contribution to totalEnergy
             # Complex noise vector to subtract = T * normalize(EO) times degree of 'softness'
