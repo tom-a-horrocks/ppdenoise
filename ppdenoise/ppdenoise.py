@@ -384,7 +384,7 @@ def _filter_grids_3d(nx: int, ny: int, nz: int) -> tuple[np.ndarray, np.ndarray,
 
 
 def ppdenoise3d(
-        img: np.ndarray,
+        vol: np.ndarray,
         nscale: int = 5,
         mult: float = 2.5,
         minwavelength: float = 2.0,
@@ -398,12 +398,17 @@ def ppdenoise3d(
     # Use the angle between face-centres of icosahedron (or vertices of dodecahedron)
     theta_sigma = acos(sqrt(5) / 3)  # about 42 degrees
 
-    plns, rows, cols = img.shape
-    freq_img = fftn(img)
+    len_x, len_y, len_z = vol.shape
+    print('Fourier transform of volume')
+    freq_img = fftn(vol)
+    print('Construct cartesian grids in frequency domain')
     # Generate grid data for constructing filters in the frequency domain
-    freq, fx, fy, fz = _filter_grids_3d(plns, rows, cols)
+    freq, fx, fy, fz = _filter_grids_3d(len_x, len_y, len_z)
+    print('Construct angular grids in frequency domain')
     sin_polar, cos_polar, sin_azimuth, cos_azimuth = _grid_angles_3d(freq, fx, fy, fz)
-    total_energy = np.zeros((plns, rows, cols), np.cdouble)  # response at each orientation.
+    del fx, fy, fz
+    print('Initialise total energy matrix')
+    total_energy = np.zeros((len_x, len_y, len_z), np.cdouble)  # response at each orientation.
     ray_mean = 0.0
     ray_var = 0.0
 
@@ -421,6 +426,7 @@ def ppdenoise3d(
                     Ori3D(polar=atan(3 + sqrt(5)), azimuth=(pi / 5))]
 
     for o in orientations:  # For each of ten orientations.
+        print('Orientation: ', o)
         # Generate angular filter
         angle_filter = _gaussian_angular_filter_3d(
             polar=o.polar,
@@ -435,10 +441,10 @@ def ppdenoise3d(
         wavelength = minwavelength  # Initialize filter wavelength.
 
         for s in range(1, nscale + 1):
+            print('Scale: ', s)
             # Construct the filter = logGabor filter * angular filter
             fo = 1.0 / wavelength
-            scale_filter = _log_gabor(freq, fo, sigmaonf)
-            final_filter = scale_filter * angle_filter
+            final_filter = _log_gabor(freq, fo, sigmaonf) * angle_filter
 
             # Convolve image with even an odd filters returning the result in EO
             EO = ifftn(freq_img * final_filter)
@@ -467,4 +473,7 @@ def ppdenoise3d(
             total_energy[above_thresh] += EO[above_thresh]
 
             wavelength *= mult  # Wavelength of next filter
+
+            # Clean up for next iteration
+            del final_filter, EO, aEO, above_thresh, V
     return np.real(total_energy)
